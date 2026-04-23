@@ -10,6 +10,22 @@ __pycache__
 .ini
 *.convex.*
 imgui.ini
+
+# Data files (important for your case)
+*.csv
+*.bag
+*.npz
+*.mp4
+*.png
+*.log
+*.pyc
+*.txt
+*.json
+*.zip
+# Temp / lock files
+.~*
+.~lock.*
+#*#
 .mypy_cache
 .DS_Store
 /.idea

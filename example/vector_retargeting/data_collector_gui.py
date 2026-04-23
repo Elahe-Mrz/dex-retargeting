@@ -29,8 +29,6 @@ import shutil
 import traceback
 import multiprocessing
 import signal
-import ctypes
-from PIL import Image, ImageTk
 
 import matplotlib
 matplotlib.use("TkAgg")
@@ -171,20 +169,10 @@ class DataCollectorGUI:
         self.fsr = None
 
         # retargeting processes
-        self.retarg_producer   = None
-        self.retarg_consumer   = None
-        self.retarg_queue      = None
-        self.retarg_save_event = None
-
-        # shared frame buffers (written by consumer, read by GUI)
-        # Layout: [flag(1 byte), W(4), H(4), C(4), pixels(W*H*C)]
-        # flag=1 means a new frame is ready
-        _SHM_MAX = 1 + 5 + 320 * 240 * 3           # fits 320×240 RGB
-        self.retarg_cam_shm   = multiprocessing.Array(ctypes.c_uint8, _SHM_MAX)
-        self.retarg_robot_shm = multiprocessing.Array(ctypes.c_uint8, _SHM_MAX)
-        self._video_after_id  = None
-        self._cam_photo       = None   # keep reference to avoid GC
-        self._robot_photo     = None
+        self.retarg_producer  = None   # multiprocessing.Process
+        self.retarg_consumer  = None   # multiprocessing.Process
+        self.retarg_queue     = None   # multiprocessing.Queue
+        self.retarg_save_event = None  # multiprocessing.Event – set = save on
 
         # plot
         self.emg_buf        = None
@@ -487,7 +475,7 @@ class DataCollectorGUI:
         self.retarg_robot_entry.grid(row=1, column=1, sticky="we", padx=6, pady=3)
 
         self._lbl(fret, "Retarget type", 2)
-        self.retarg_type_var = tk.StringVar(value="dexpilot")
+        self.retarg_type_var = tk.StringVar(value="vector")
         self.retarg_type_entry = self._entry(fret, self.retarg_type_var, width=18)
         self.retarg_type_entry.grid(row=2, column=1, sticky="we", padx=6, pady=3)
 
@@ -518,10 +506,9 @@ class DataCollectorGUI:
     # ── right panel ───────────────────────────────────────────────────────────
     def _build_right(self, parent):
         parent.rowconfigure(0, weight=0)   # instruction banner
-        parent.rowconfigure(1, weight=0)   # video panels (camera + robot)
-        parent.rowconfigure(2, weight=3)   # plot
-        parent.rowconfigure(3, weight=0)   # separator
-        parent.rowconfigure(4, weight=1)   # console
+        parent.rowconfigure(1, weight=3)   # plot
+        parent.rowconfigure(2, weight=0)   # separator
+        parent.rowconfigure(3, weight=1)   # console
         parent.columnconfigure(0, weight=1)
 
         # INSTRUCTION BANNER
@@ -559,34 +546,9 @@ class DataCollectorGUI:
 
         tk.Frame(parent, bg=BORDER, height=1).grid(row=0, column=0, sticky="sew")
 
-        # VIDEO PANELS (camera feed + sapien robot) — hidden until retargeting starts
-        self._video_frame = tk.Frame(parent, bg=BG, height=200)
-        self._video_frame.grid(row=1, column=0, sticky="nsew")
-        self._video_frame.columnconfigure(0, weight=1)
-        self._video_frame.columnconfigure(1, weight=1)
-        self._video_frame.grid_remove()   # hidden by default
-
-        # Camera feed canvas
-        cam_wrap = tk.Frame(self._video_frame, bg=BG)
-        cam_wrap.grid(row=0, column=0, sticky="nsew", padx=(4,2), pady=4)
-        tk.Label(cam_wrap, text="CAMERA", bg=BG, fg=FG3,
-                 font=("Consolas", 7)).pack(anchor="w", padx=4)
-        self._cam_canvas = tk.Canvas(cam_wrap, bg=BG2,
-                                     highlightthickness=0, width=320, height=180)
-        self._cam_canvas.pack(fill="both", expand=True)
-
-        # Sapien robot canvas
-        robot_wrap = tk.Frame(self._video_frame, bg=BG)
-        robot_wrap.grid(row=0, column=1, sticky="nsew", padx=(2,4), pady=4)
-        tk.Label(robot_wrap, text="ROBOT VIEW", bg=BG, fg=FG3,
-                 font=("Consolas", 7)).pack(anchor="w", padx=4)
-        self._robot_canvas = tk.Canvas(robot_wrap, bg=BG2,
-                                       highlightthickness=0, width=320, height=180)
-        self._robot_canvas.pack(fill="both", expand=True)
-
         # PLOT
         plot_frame = tk.Frame(parent, bg=PLOT_BG)
-        plot_frame.grid(row=2, column=0, sticky="nsew")
+        plot_frame.grid(row=1, column=0, sticky="nsew")
 
         self._fig = Figure(facecolor=PLOT_BG, tight_layout={"pad": 1.2})
         self._build_plot_axes()
@@ -601,11 +563,11 @@ class DataCollectorGUI:
         self._canvas.draw_idle()
 
         # SEPARATOR
-        tk.Frame(parent, bg=BORDER, height=1).grid(row=3, column=0, sticky="ew")
+        tk.Frame(parent, bg=BORDER, height=1).grid(row=2, column=0, sticky="ew")
 
         # LOG CONSOLE
         log_frame = tk.Frame(parent, bg=BG)
-        log_frame.grid(row=4, column=0, sticky="nsew")
+        log_frame.grid(row=3, column=0, sticky="nsew")
         log_frame.rowconfigure(1, weight=1)
         log_frame.columnconfigure(0, weight=1)
         tk.Label(log_frame, text=" LOG", bg=BG, fg=FG2,
@@ -634,8 +596,8 @@ class DataCollectorGUI:
         n_emg_ch = max(1, int(n_emg_ch))
         n_rows   = n_emg_ch + (1 if use_fsr else 0)
 
-        # height ratios: each EMG row = 2.5 units, FSR row = dynamically scaled to prevent squashing
-        ratios = [2.5] * n_emg_ch + ([max(4.0, 1.25 * n_emg_ch)] if use_fsr else [])
+        # height ratios: each EMG row = 3 units, FSR row = dynamically scaled to prevent squashing
+        ratios = [3] * n_emg_ch + ([max(4.0, 1.5 * n_emg_ch)] if use_fsr else [])
         gs = gridspec.GridSpec(n_rows, 1, figure=self._fig,
                                height_ratios=ratios,
                                hspace=0.04)
@@ -739,84 +701,6 @@ class DataCollectorGUI:
         for w in self._retarg_widgets:
             try: w.configure(state=st)
             except tk.TclError: pass
-
-    # ── Embedded video feed ───────────────────────────────────────────────────
-    def _start_video_feed(self):
-        """Show video panel and start polling shared frame buffers."""
-        self._video_frame.grid()
-        # Draw placeholder while waiting for first frame
-        for canvas, label in [
-            (self._cam_canvas,   "Waiting for camera…"),
-            (self._robot_canvas, "Waiting for robot render…"),
-        ]:
-            canvas.delete("all")
-            canvas.create_text(
-                canvas.winfo_reqwidth() // 2,
-                canvas.winfo_reqheight() // 2,
-                text=label, fill=FG2,
-                font=("Segoe UI", 9))
-        self._poll_video_frames()
-
-    def _stop_video_feed(self):
-        self._video_frame.grid_remove()
-        if self._video_after_id:
-            self.root.after_cancel(self._video_after_id)
-            self._video_after_id = None
-        self._cam_photo   = None
-        self._robot_photo = None
-
-    def _poll_video_frames(self):
-        """Called every 40 ms on the main thread to blit new frames into canvases."""
-        # Stop polling if retargeting processes have both exited
-        consumer_alive = (self.retarg_consumer is not None and
-                          self.retarg_consumer.is_alive())
-        if not consumer_alive and self._video_after_id is not None:
-            self._stop_video_feed()
-            return
-
-        self._blit_shm(self.retarg_cam_shm,   self._cam_canvas,   "_cam_photo")
-        self._blit_shm(self.retarg_robot_shm, self._robot_canvas, "_robot_photo")
-        self._video_after_id = self.root.after(40, self._poll_video_frames)
-
-    def _blit_shm(self, shm, canvas, photo_attr):
-        """
-        Read one frame from shared memory and display it on canvas.
-        Uses ctypes.memmove for fast pixel copy — no Python list overhead.
-        """
-        try:
-            buf = shm.get_obj()
-            if buf[0] != 1:       # flag byte — 0 = no new frame
-                return
-            buf[0] = 0            # clear flag immediately
-            w = buf[1] | (buf[2] << 8)
-            h = buf[3] | (buf[4] << 8)
-            c = buf[5]
-            n = w * h * c
-            if n <= 0 or 6 + n > len(buf):
-                return
-
-            # Fast zero-copy read via memmove into a numpy array
-            arr = np.empty(n, dtype=np.uint8)
-            ctypes.memmove(
-                arr.ctypes.data,
-                ctypes.addressof(buf) + 6,
-                n
-            )
-            arr = arr.reshape((h, w, c))
-
-            # Resize to fit canvas preserving aspect ratio
-            cw = canvas.winfo_width()  or 320
-            ch = canvas.winfo_height() or 180
-            scale = min(cw / max(w, 1), ch / max(h, 1))
-            nw = max(1, int(w * scale))
-            nh = max(1, int(h * scale))
-            img   = Image.fromarray(arr).resize((nw, nh), Image.BILINEAR)
-            photo = ImageTk.PhotoImage(img)
-            setattr(self, photo_attr, photo)
-            canvas.delete("all")
-            canvas.create_image(cw // 2, ch // 2, anchor="center", image=photo)
-        except Exception:
-            pass
 
     def _set_gesture(self, name):
         self.gesture_var.set(name)
@@ -1173,18 +1057,6 @@ class DataCollectorGUI:
             text="Press  ▷ Preview  or  ⏺ Start Recording  to begin.", fg=FG)
         self.force_label.config(text="")
 
-    def _check_retarg_processes(self):
-        """Poll every 2 s while retargeting is active to catch early exits."""
-        if self.retarg_consumer is None:
-            return
-        if not self.retarg_consumer.is_alive():
-            ec = self.retarg_consumer.exitcode
-            self._log(f"⚠ Retargeting consumer exited (code={ec}). "
-                      f"Check retargeting_teleop.py is the updated version.")
-            self._stop_video_feed()
-            return
-        self.root.after(2000, self._check_retarg_processes)
-
     # ═══════════════════════════════════════════════════════════════════════════
     #  Recording
     # ═══════════════════════════════════════════════════════════════════════════
@@ -1465,7 +1337,7 @@ class DataCollectorGUI:
             from dex_retargeting.constants import (
                 RobotName, RetargetingType, HandType, get_default_config_path)
             from dex_retargeting.retargeting_config import RetargetingConfig
-            from retargeting_teleop_2 import produce_frame, start_retargeting
+            from retargeting_teleop import produce_frame, start_retargeting
             from pathlib import Path
         except ImportError as e:
             self._log(f"Retargeting import failed: {e} — skipping.")
@@ -1490,7 +1362,7 @@ class DataCollectorGUI:
             Path(__file__).absolute().parent.parent.parent
             / "assets" / "robots" / "hands")
 
-        self.retarg_queue      = multiprocessing.Queue(maxsize=1)  # always-fresh frames
+        self.retarg_queue      = multiprocessing.Queue(maxsize=1000)
         self.retarg_save_event = multiprocessing.Event()  # clear = stream only
 
         # Default output dir: a 'retargeting' subfolder inside save_dir
@@ -1498,12 +1370,10 @@ class DataCollectorGUI:
         #  is triggered later via retarg_save_event + dir passed separately)
         retarg_base_dir = self.save_dir_var.get().strip() or "./Data"
 
-        def _consumer_entry(q, rd, cp, base_dir, save_event,
-                            cam_shm, robot_shm):
+        def _consumer_entry(q, rd, cp, base_dir, save_event):
             import os
             os.environ["NEUROCAPTURE_BASE_DIR"] = base_dir
-            start_retargeting(q, rd, cp, save_event=save_event,
-                              cam_shm=cam_shm, robot_shm=robot_shm)
+            start_retargeting(q, rd, cp, save_event=save_event)
 
         self.retarg_producer = multiprocessing.Process(
             target=produce_frame,
@@ -1512,8 +1382,7 @@ class DataCollectorGUI:
         self.retarg_consumer = multiprocessing.Process(
             target=_consumer_entry,
             args=(self.retarg_queue, robot_dir, str(config_path),
-                  retarg_base_dir, self.retarg_save_event,
-                  self.retarg_cam_shm, self.retarg_robot_shm),
+                  retarg_base_dir, self.retarg_save_event),
             daemon=True)
 
         self.retarg_producer.start()
@@ -1521,12 +1390,6 @@ class DataCollectorGUI:
         self._log(f"Retargeting streaming (robot={self.retarg_robot_var.get()}, "
                   f"hand={self.retarg_hand_var.get()}, cam={cam}) — "
                   f"not saving yet.")
-        self._log(f"Retargeting consumer PID: {self.retarg_consumer.pid}")
-        self._log(f"Retargeting producer PID: {self.retarg_producer.pid}")
-        # Show embedded video panels immediately
-        self._start_video_feed()
-        # Monitor process health
-        self.root.after(2000, self._check_retarg_processes)
 
     def _stop_retargeting(self):
         """Gracefully terminate retargeting processes."""
@@ -1543,7 +1406,6 @@ class DataCollectorGUI:
             except Exception: pass
             self.retarg_queue = None
         self._log("Retargeting stopped.")
-        self.root.after(0, self._stop_video_feed)
 
     # ── close ─────────────────────────────────────────────────────────────────
     def _on_close(self):

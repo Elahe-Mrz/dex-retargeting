@@ -12,7 +12,7 @@ import mediapipe as mp
 SERIAL_1 = "215322071654"   # Cam1
 SERIAL_2 = "213622077408"   # Cam3
 
-CALIB_FILE = "stereo_fixed_intrinsics_cam12.npz"
+CALIB_FILE = "stereo_cam13_recalibrated.npz"
 
 WIDTH, HEIGHT, FPS = 640, 480, 30
 
@@ -242,8 +242,6 @@ if SAVE_LOG:
     for i in range(21):
         header += [
             f"lm{i}_x", f"lm{i}_y", f"lm{i}_z",
-            f"c1_lm{i}_x", f"c1_lm{i}_y",
-            f"c2_lm{i}_x", f"c2_lm{i}_y",
             f"lm{i}_conf",
             f"lm{i}_err1",
             f"lm{i}_err2",
@@ -327,7 +325,6 @@ class MultiViewTracker:
             z *= -1
         frame = np.stack([x, normal, z], axis=1)
         return frame
-    
     def compute_joint_pos(self, pts3D):
         pts3D = pts3D - pts3D[0:1]
 
@@ -564,9 +561,9 @@ class MultiViewTracker:
 
         print(f"DEBUG: score={frame_score:.3f}, err1={np.mean(err1):.1f}, err2={np.mean(err2):.1f}")
         gt_valid = (
-            frame_score > 0.5 and
-            np.mean(err1) < 5 and
-            np.mean(err2) < 5
+            frame_score > 0.04 and
+            np.mean(err1) < 15 and
+            np.mean(err2) < 15
         )
         
 
@@ -805,10 +802,6 @@ if __name__ == "__main__":
                             float(pts3D[i, 0]),
                             float(pts3D[i, 1]),
                             float(pts3D[i, 2]),
-                            float(pts1[i, 0]),
-                            float(pts1[i, 1]),
-                            float(pts2[i, 0]),
-                            float(pts2[i, 1]),
                             float(final_conf[i]),
                             float(err1[i]),
                             float(err2[i]),

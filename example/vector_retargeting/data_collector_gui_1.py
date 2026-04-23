@@ -487,7 +487,7 @@ class DataCollectorGUI:
         self.retarg_robot_entry.grid(row=1, column=1, sticky="we", padx=6, pady=3)
 
         self._lbl(fret, "Retarget type", 2)
-        self.retarg_type_var = tk.StringVar(value="dexpilot")
+        self.retarg_type_var = tk.StringVar(value="vector")
         self.retarg_type_entry = self._entry(fret, self.retarg_type_var, width=18)
         self.retarg_type_entry.grid(row=2, column=1, sticky="we", padx=6, pady=3)
 
@@ -634,8 +634,8 @@ class DataCollectorGUI:
         n_emg_ch = max(1, int(n_emg_ch))
         n_rows   = n_emg_ch + (1 if use_fsr else 0)
 
-        # height ratios: each EMG row = 2.5 units, FSR row = dynamically scaled to prevent squashing
-        ratios = [2.5] * n_emg_ch + ([max(4.0, 1.25 * n_emg_ch)] if use_fsr else [])
+        # height ratios: each EMG row = 3 units, FSR row = dynamically scaled to prevent squashing
+        ratios = [3] * n_emg_ch + ([max(4.0, 1.5 * n_emg_ch)] if use_fsr else [])
         gs = gridspec.GridSpec(n_rows, 1, figure=self._fig,
                                height_ratios=ratios,
                                hspace=0.04)
@@ -744,17 +744,6 @@ class DataCollectorGUI:
     def _start_video_feed(self):
         """Show video panel and start polling shared frame buffers."""
         self._video_frame.grid()
-        # Draw placeholder while waiting for first frame
-        for canvas, label in [
-            (self._cam_canvas,   "Waiting for camera…"),
-            (self._robot_canvas, "Waiting for robot render…"),
-        ]:
-            canvas.delete("all")
-            canvas.create_text(
-                canvas.winfo_reqwidth() // 2,
-                canvas.winfo_reqheight() // 2,
-                text=label, fill=FG2,
-                font=("Segoe UI", 9))
         self._poll_video_frames()
 
     def _stop_video_feed(self):
@@ -767,13 +756,6 @@ class DataCollectorGUI:
 
     def _poll_video_frames(self):
         """Called every 40 ms on the main thread to blit new frames into canvases."""
-        # Stop polling if retargeting processes have both exited
-        consumer_alive = (self.retarg_consumer is not None and
-                          self.retarg_consumer.is_alive())
-        if not consumer_alive and self._video_after_id is not None:
-            self._stop_video_feed()
-            return
-
         self._blit_shm(self.retarg_cam_shm,   self._cam_canvas,   "_cam_photo")
         self._blit_shm(self.retarg_robot_shm, self._robot_canvas, "_robot_photo")
         self._video_after_id = self.root.after(40, self._poll_video_frames)
@@ -1173,18 +1155,6 @@ class DataCollectorGUI:
             text="Press  ▷ Preview  or  ⏺ Start Recording  to begin.", fg=FG)
         self.force_label.config(text="")
 
-    def _check_retarg_processes(self):
-        """Poll every 2 s while retargeting is active to catch early exits."""
-        if self.retarg_consumer is None:
-            return
-        if not self.retarg_consumer.is_alive():
-            ec = self.retarg_consumer.exitcode
-            self._log(f"⚠ Retargeting consumer exited (code={ec}). "
-                      f"Check retargeting_teleop.py is the updated version.")
-            self._stop_video_feed()
-            return
-        self.root.after(2000, self._check_retarg_processes)
-
     # ═══════════════════════════════════════════════════════════════════════════
     #  Recording
     # ═══════════════════════════════════════════════════════════════════════════
@@ -1490,7 +1460,7 @@ class DataCollectorGUI:
             Path(__file__).absolute().parent.parent.parent
             / "assets" / "robots" / "hands")
 
-        self.retarg_queue      = multiprocessing.Queue(maxsize=1)  # always-fresh frames
+        self.retarg_queue      = multiprocessing.Queue(maxsize=1000)
         self.retarg_save_event = multiprocessing.Event()  # clear = stream only
 
         # Default output dir: a 'retargeting' subfolder inside save_dir
@@ -1521,12 +1491,8 @@ class DataCollectorGUI:
         self._log(f"Retargeting streaming (robot={self.retarg_robot_var.get()}, "
                   f"hand={self.retarg_hand_var.get()}, cam={cam}) — "
                   f"not saving yet.")
-        self._log(f"Retargeting consumer PID: {self.retarg_consumer.pid}")
-        self._log(f"Retargeting producer PID: {self.retarg_producer.pid}")
-        # Show embedded video panels immediately
-        self._start_video_feed()
-        # Monitor process health
-        self.root.after(2000, self._check_retarg_processes)
+        # Show embedded video panels
+        self.root.after(0, self._start_video_feed)
 
     def _stop_retargeting(self):
         """Gracefully terminate retargeting processes."""

@@ -500,6 +500,8 @@
 
 
 
+
+
 # ---- minimal, compatible upgrade to SingleHandDetector ----
 # 1) Force CPU graph before importing mediapipe to avoid EGL/GPU crashes.
 import os as _os
@@ -698,6 +700,7 @@ class SingleHandDetector:
         # --- parse 3D world landmarks (unchanged math) ---
         keypoint_3d_array = self.parse_keypoint_3d(keypoint_3d)
         keypoint_3d_array = keypoint_3d_array - keypoint_3d_array[0:1, :]
+
         mediapipe_wrist_rot = self.estimate_frame_from_hand_points(keypoint_3d_array)
         joint_pos = keypoint_3d_array @ mediapipe_wrist_rot @ self.operator2mano
 
@@ -747,7 +750,7 @@ class SingleHandDetector:
         _, _, v = np.linalg.svd(pts)
         normal = v[2, :]
         x = x_vector - np.sum(x_vector * normal) * normal
-        x = x / np.linalg.norm(x)
+        x = x / (np.linalg.norm(x) + 1e-6)
         z = np.cross(x, normal)
         if np.sum(z * (points[1] - points[2])) < 0:
             normal *= -1; z *= -1
